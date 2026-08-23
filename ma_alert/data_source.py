@@ -77,9 +77,10 @@ def _clist_page(host, pn, pz=100):
     return _get_json(url)
 
 
-def fetch_spot_all(pz=100, max_pages=80, workers=10):
+def fetch_spot_all(pz=100, max_pages=80, workers=6):
     """获取全市场实时行情快照（自动切换主机 + 并发分页拉取）。
 
+    容错：单个分页失败自动跳过不中断；超过 30% 分页失败才报错。
     字段: code, name, price, pct_chg, volume(手), amount(元),
           turnover(%), vol_ratio(量比), total_mv(元), float_mv(元), pb
     """
@@ -99,13 +100,26 @@ def fetch_spot_all(pz=100, max_pages=80, workers=10):
 
     pages = list(range(2, min(max_pages, math.ceil((total or len(stocks)) / pz)) + 1))
     if pages:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            results = list(ex.map(lambda pn: _clist_page(host, pn, pz=pz), pages))
-        for d in results:
+        def _safe_page(pn):
             try:
-                stocks += [_parse_spot(x) for x in (d.get("data") or {}).get("diff") or [] if x]
+                return _clist_page(host, pn, pz=pz)
+            except Exception:  # noqa: BLE001
+                return None
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(_safe_page, pages))
+        got = 0
+        for d in results:
+            if not d:
+                continue
+            try:
+                diff = (d.get("data") or {}).get("diff") or []
+                stocks += [_parse_spot(x) for x in diff if x]
+                got += 1
             except Exception:  # noqa: BLE001
                 continue
+        if got < max(1, int(len(pages) * 0.7)):
+            raise RuntimeError(f"行情分页获取失败过多（成功 {got}/{len(pages)}），可能被限流")
     return stocks
 
 
