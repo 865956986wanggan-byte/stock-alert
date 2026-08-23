@@ -7,6 +7,10 @@ on:
     - cron: '25 1 * * 1-5'
   workflow_dispatch: {}
 
+# 允许保活步骤把运行记录推回仓库（避免 60 天无活动自动暂停定时任务）
+permissions:
+  contents: write
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -23,7 +27,7 @@ jobs:
 
       - name: 运行每日筛选并推送微信
         env:
-          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+          SERVERCHAN_SENDKEY: ${ secrets.SERVERCHAN_SENDKEY }
         run: python ma_alert/main.py daily
 
       - name: 保活并记录去重状态（避免60天无活动自动暂停）
