@@ -1,0 +1,37 @@
+name: 每日推送（A股均线粘合）
+
+on:
+  schedule:
+    # 北京时间 15:05 = UTC 07:05；北京时间 09:25 = UTC 01:25（周一~周五）
+    - cron: '5 7 * * 1-5'
+    - cron: '25 1 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: pip install pandas numpy
+
+      - name: 运行每日筛选并推送微信
+        env:
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+        run: python ma_alert/main.py daily
+
+      - name: 保活并记录去重状态（避免60天无活动自动暂停）
+        run: |
+          echo "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" > last_run.txt
+          git config user.name "stock-alert-bot"
+          git config user.email "stock-alert-bot@users.noreply.github.com"
+          git add last_run.txt
+          git add -f outputs/seen.json 2>/dev/null || true
+          git commit -m "daily keep-alive $(date -u +%Y%m%d%H%M%S)" || echo "无文件变化，跳过提交"
+          git push
