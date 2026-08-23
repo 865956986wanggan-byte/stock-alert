@@ -1,0 +1,57 @@
+{
+  "ma_periods": [
+    5,
+    10,
+    20,
+    30,
+    60
+  ],
+  "cluster_pct": 4.0,
+  "converge_min_days": 3,
+  "converge_max_days": 60,
+  "base_range_pct": 18.0,
+  "breakout_lookback": 3,
+  "volume_ratio": 1.5,
+  "min_breakout_gain": 1.0,
+  "min_price": 2.0,
+  "max_price": 600.0,
+  "exclude_st": true,
+  "min_list_days": 60,
+  "min_turnover": 0.5,
+  "max_turnover": 30.0,
+  "min_market_cap_yi": 30.0,
+  "min_score": 60.0,
+  "fetch_workers": 8,
+  "request_delay": 0.08,
+  "cache_ttl_min": 60,
+  "watch_interval_min": 5,
+  "watch_cache_ttl_min": 10,
+  "alerts": {
+    "windows_toast": true,
+    "serverchan": {
+      "enabled": false,
+      "send_key": ""
+    },
+    "pushplus": {
+      "enabled": false,
+      "token": ""
+    },
+    "dingtalk": {
+      "enabled": false,
+      "webhook": ""
+    },
+    "wecom": {
+      "enabled": false,
+      "webhook": ""
+    },
+    "email": {
+      "enabled": false,
+      "smtp_host": "smtp.qq.com",
+      "smtp_port": 465,
+      "user": "",
+      "password": "",
+      "to": ""
+    }
+  },
+  "notify_when_empty": true
+}
