@@ -7,6 +7,10 @@ on:
     - cron: '25 1 * * 1-5'
   workflow_dispatch: {}
 
+# 允许保活步骤把运行记录推回仓库（避免 60 天无活动自动暂停定时任务）
+permissions:
+  contents: write
+
 jobs:
   run:
     runs-on: ubuntu-latest
