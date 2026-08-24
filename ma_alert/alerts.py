@@ -179,3 +179,42 @@ def notify(cfg, hits):
         except Exception as e:  # noqa: BLE001
             print("  [提醒] 邮件发送失败:", e)
     return results
+
+
+def send_text(cfg, title, text):
+    """把自定义文本推送到所有已启用渠道（不做信号格式化）。"""
+    a = cfg.get("alerts", {})
+    results = {"console": True}
+    if a.get("serverchan", {}).get("enabled"):
+        try:
+            serverchan(a["serverchan"]["send_key"], title, text)
+            results["serverchan"] = True
+        except Exception as e:  # noqa: BLE001
+            print("  [提醒] Server酱推送失败:", e)
+            results["serverchan"] = False
+    if a.get("pushplus", {}).get("enabled"):
+        try:
+            pushplus(a["pushplus"]["token"], title, text)
+            results["pushplus"] = True
+        except Exception as e:  # noqa: BLE001
+            print("  [提醒] PushPlus推送失败:", e)
+            results["pushplus"] = False
+    if a.get("dingtalk", {}).get("enabled"):
+        try:
+            dingtalk(a["dingtalk"]["webhook"], title, text.replace("\n", "\n\n"))
+            results["dingtalk"] = True
+        except Exception as e:  # noqa: BLE001
+            print("  [提醒] 钉钉推送失败:", e)
+    if a.get("wecom", {}).get("enabled"):
+        try:
+            wecom(a["wecom"]["webhook"], title, text)
+            results["wecom"] = True
+        except Exception as e:  # noqa: BLE001
+            print("  [提醒] 企业微信推送失败:", e)
+    if a.get("email", {}).get("enabled"):
+        try:
+            send_email(a["email"], title, text)
+            results["email"] = True
+        except Exception as e:  # noqa: BLE001
+            print("  [提醒] 邮件发送失败:", e)
+    return results
