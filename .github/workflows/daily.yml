@@ -12,6 +12,8 @@ on:
     - cron: '15 6 * * 1-5'
     - cron: '45 6 * * 1-5'
     - cron: '5 7 * * 1-5'
+    - cron: '5 9 * * 1-5'
+    - cron: '5 11 * * 1-5'
   workflow_dispatch: {}
 
 # 允许保活步骤把运行记录推回仓库（避免 60 天无活动自动暂停定时任务）
@@ -32,10 +34,12 @@ jobs:
       - name: 安装依赖
         run: pip install pandas numpy
 
-      - name: 盘中扫描并推送新信号
+      - name: 盘中扫描并推送新信号（失败自动微信告警）
         env:
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
-        run: python ma_alert/main.py scan
+        run: |
+          python ma_alert/main.py scan > /tmp/scan.log 2>&1 \
+            || python ma_alert/main.py alertfail "$(tail -c 600 /tmp/scan.log)"
 
       - name: 保活并记录去重状态（避免60天无活动自动暂停）
         run: |
@@ -43,6 +47,6 @@ jobs:
           git config user.name "stock-alert-bot"
           git config user.email "stock-alert-bot@users.noreply.github.com"
           git add last_run.txt
-          git add -f outputs/seen.json outputs/spot_cache.json 2>/dev/null || true
+          git add -f outputs/seen.json outputs/spot_cache.json outputs/scan_stats.json 2>/dev/null || true
           git commit -m "daily keep-alive $(date -u +%Y%m%d%H%M%S)" || echo "无文件变化，跳过提交"
           git push
