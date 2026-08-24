@@ -232,7 +232,7 @@ def run_scan(cfg, cache_ttl=None):
     stats["runs"] += 1
     pushed_now = 0
     try:
-        hits, _ = run_once(cfg, do_notify=True, prev_seen=seen, cache_ttl=cache_ttl)
+        hits, _ = run_once(cfg, do_notify=True, prev_seen={"signals": sorted(seen)}, cache_ttl=cache_ttl)
         stats["ok"] += 1
         new_hits = [h for h in hits if f"{h['code']}|{h['breakout_date']}" not in seen]
         for h in new_hits:
