@@ -120,14 +120,19 @@ def run_daily(cfg):
         print(f"== 数据日期 {report_date} 已推送过，跳过（避免重复/周末重复推送）")
         return
     if hits:
-        alerts.notify(cfg, hits)
+        results = alerts.notify(cfg, hits)
     elif cfg.get("notify_when_empty", True):
-        alerts.notify(cfg, [])  # 推送"今日暂无符合条件的股票"
+        results = alerts.notify(cfg, [])  # 推送"今日暂无符合条件的股票"
     else:
         print("== 今日无信号，且 notify_when_empty=false，不推送")
-    state["last_report_date"] = report_date
-    save_state(state)
-    print(f"== 已推送数据日期：{report_date}")
+        return
+    pushed = any(v for k, v in results.items() if k != "console" and v)
+    if pushed:
+        state["last_report_date"] = report_date
+        save_state(state)
+        print(f"== 已推送数据日期：{report_date}")
+    else:
+        print("== 所有提醒渠道都失败了，未记录状态，下次运行会自动重试")
 
 
 def watch_loop(cfg):
