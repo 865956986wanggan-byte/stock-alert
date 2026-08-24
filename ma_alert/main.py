@@ -167,6 +167,20 @@ def run_daily(cfg):
         print("== 所有提醒渠道都失败了，未记录状态，下次运行会自动重试")
 
 
+def run_scan(cfg, cache_ttl=None):
+    """盘中扫描模式：只推送新信号（按 code|breakout_date 去重）。
+
+    供云端定时/本地调度器每个交易时段调用：每次全市场扫描一次，
+    只把"新出现的信号"推送到微信，同一信号不重复打扰。
+    """
+    state = load_state()
+    seen = set(state.get("signals", []))
+    hits, _ = run_once(cfg, do_notify=True, prev_seen=seen, cache_ttl=cache_ttl)
+    for h in hits:
+        seen.add(f"{h['code']}|{h['breakout_date']}")
+    save_state({"signals": sorted(seen)})
+
+
 def watch_loop(cfg):
     interval = int(cfg.get("watch_interval_min", 5))
     state = load_state()
@@ -254,6 +268,9 @@ def main():
         sys.exit(test_push(cfg))
     if mode == "daily":
         run_daily(cfg)
+        return
+    if mode == "scan":
+        run_scan(cfg)
         return
     if mode == "watch":
         watch_loop(cfg)
