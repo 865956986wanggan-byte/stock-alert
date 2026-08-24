@@ -167,18 +167,101 @@ def run_daily(cfg):
         print("== 所有提醒渠道都失败了，未记录状态，下次运行会自动重试")
 
 
+SCAN_STATS_PATH = os.path.join(OUT_DIR, "scan_stats.json")
+
+
+def _load_scan_stats():
+    try:
+        with open(SCAN_STATS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_scan_stats(stats):
+    try:
+        with open(SCAN_STATS_PATH, "w", encoding="utf-8") as f:
+            json.dump(stats, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+def _beijing_now():
+    import datetime
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+
+
+def _send_scan_summary(cfg, stats):
+    """发送收盘总结（每个交易日最多一次）。"""
+    if stats.get("summary_sent"):
+        return False
+    date = stats.get("date", "")
+    lines = [f"📊 A股均线粘合 · 收盘总结 {date}",
+             f"今日盘中扫描 {stats.get('runs', 0)} 次，成功 {stats.get('ok', 0)} 次"]
+    errs = stats.get("errors") or []
+    if errs:
+        lines.append(f"⚠️ 失败 {len(errs)} 次：" + "；".join(errs[:3]))
+    else:
+        lines.append("✅ 全部扫描正常")
+    lines.append(f"今日推送新信号 {stats.get('pushed', 0)} 条")
+    text = "\n".join(lines)
+    try:
+        alerts.send_text(cfg, "A股均线粘合 · 收盘总结", text)
+        stats["summary_sent"] = True
+        _save_scan_stats(stats)
+        print(text)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print("收盘总结发送失败:", e)
+        return False
+
+
 def run_scan(cfg, cache_ttl=None):
     """盘中扫描模式：只推送新信号（按 code|breakout_date 去重）。
 
     供云端定时/本地调度器每个交易时段调用：每次全市场扫描一次，
     只把"新出现的信号"推送到微信，同一信号不重复打扰。
+    同时记录每日运行统计；北京时间 >= 15:05 时自动发送收盘总结。
     """
     state = load_state()
     seen = set(state.get("signals", []))
-    hits, _ = run_once(cfg, do_notify=True, prev_seen=seen, cache_ttl=cache_ttl)
-    for h in hits:
-        seen.add(f"{h['code']}|{h['breakout_date']}")
+    today = time.strftime("%Y-%m-%d")
+    stats = _load_scan_stats()
+    if stats.get("date") != today:
+        stats = {"date": today, "runs": 0, "ok": 0, "errors": [], "pushed": 0}
+    stats["runs"] += 1
+    pushed_now = 0
+    try:
+        hits, _ = run_once(cfg, do_notify=True, prev_seen=seen, cache_ttl=cache_ttl)
+        stats["ok"] += 1
+        new_hits = [h for h in hits if f"{h['code']}|{h['breakout_date']}" not in seen]
+        for h in new_hits:
+            seen.add(f"{h['code']}|{h['breakout_date']}")
+        pushed_now = len(new_hits)
+        stats["pushed"] += pushed_now
+    except Exception as e:  # noqa: BLE001
+        stats["errors"].append(f"{time.strftime('%H:%M')} 失败: {str(e)[:100]}")
+        _save_scan_stats(stats)
+        raise
     save_state({"signals": sorted(seen)})
+    _save_scan_stats(stats)
+    # 收盘总结：北京时间 >= 15:05 且当日未发过
+    now_bj = _beijing_now()
+    if (now_bj.hour > 15 or (now_bj.hour == 15 and now_bj.minute >= 5)) and not stats.get("summary_sent"):
+        _send_scan_summary(cfg, stats)
+    return pushed_now
+
+
+def alert_fail(cfg, err_text=""):
+    """扫描失败时立即推送警告到微信。"""
+    title = "⚠️ A股盘中扫描失败"
+    text = ("刚刚的盘中扫描出错了：\n" + (err_text or "未知错误")[:600] +
+            "\n\n下一轮（30分钟后）会自动重试，请稍后留意。")
+    try:
+        alerts.send_text(cfg, title, text)
+        print("已发送失败警告")
+    except Exception as e:  # noqa: BLE001
+        print("失败警告发送出错:", e)
 
 
 def watch_loop(cfg):
@@ -271,6 +354,9 @@ def main():
         return
     if mode == "scan":
         run_scan(cfg)
+        return
+    if mode == "alertfail":
+        alert_fail(cfg, sys.argv[2] if len(sys.argv) > 2 else "")
         return
     if mode == "watch":
         watch_loop(cfg)
