@@ -7,7 +7,32 @@
   2. 向上变盘：股价放量上穿均线束，且"刚刚"进入粘合状态（粘合天数不太多也不太少），
      配合量能放大、短期均线拐头向上，判断为"刚刚开始大涨"的启动点。
 """
+import datetime
 import numpy as np
+
+
+def _beijing_now():
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+
+
+def _is_today(date_str):
+    return date_str == _beijing_now().strftime("%Y-%m-%d")
+
+
+def _intraday_volume_factor(now):
+    """A股全天交易 240 分钟（上午 9:30-11:30，下午 13:00-15:00）；
+    盘中按已交易分钟数把成交量折算为全天量能。非交易时段返回 1。"""
+    t = now.hour * 60 + now.minute
+    elapsed = 0
+    if 570 <= t <= 690:
+        elapsed = t - 570
+    elif 780 <= t <= 900:
+        elapsed = 120 + (t - 780)
+    elif t > 900:
+        elapsed = 240
+    if elapsed <= 0:
+        return 1.0
+    return 240.0 / elapsed
 
 
 def sma(values, n):
@@ -33,6 +58,7 @@ class MaBreakoutStrategy:
         self.max_turnover = float(cfg.get("max_turnover", 30.0))       # 换手率上限 %
         self.min_mv = float(cfg.get("min_market_cap_yi", 30.0))        # 总市值下限（亿）
         self.min_score = float(cfg.get("min_score", 60.0))             # 入选最低评分
+        self.adjust_intraday_volume = bool(cfg.get("adjust_intraday_volume", True))  # 盘中量能按时间折算
 
     # ------------------------------------------------------------------
     def _build_mas(self, closes):
@@ -121,10 +147,13 @@ class MaBreakoutStrategy:
                 return None
         cluster_val = self._cluster_at(mas, b - 1)
 
-        # 4) 量能放大
+        # 4) 量能放大（盘中把今日成交量按已交易时间折算为全天量）
         prev5 = volumes[b - 6:b - 1] if b >= 6 else volumes[:b - 1]
         base_vol = float(prev5.mean()) if len(prev5) else float(volumes[b])
-        vol_ratio = float(volumes[b] / base_vol) if base_vol > 0 else 1.0
+        b_vol = float(volumes[b])
+        if self.adjust_intraday_volume and _is_today(bars[b]["date"]):
+            b_vol *= _intraday_volume_factor(_beijing_now())
+        vol_ratio = float(b_vol / base_vol) if base_vol > 0 else 1.0
         if vol_ratio < self.volume_ratio:
             return None
 
