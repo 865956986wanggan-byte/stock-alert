@@ -77,13 +77,26 @@ def _clist_page(host, pn, pz=100):
     return _get_json(url)
 
 
-def fetch_spot_all(pz=100, max_pages=80, workers=6):
+def fetch_spot_all(pz=100, max_pages=80, workers=6, retries=2):
     """获取全市场实时行情快照（自动切换主机 + 并发分页拉取）。
 
-    容错：单个分页失败自动跳过不中断；超过 30% 分页失败才报错。
+    容错：单个分页失败自动跳过不中断；超过 30% 分页失败整体重试 retries 次。
     字段: code, name, price, pct_chg, volume(手), amount(元),
           turnover(%), vol_ratio(量比), total_mv(元), float_mv(元), pb
     """
+    last_err = None
+    for attempt in range(max(1, retries)):
+        try:
+            return _fetch_spot_all_impl(pz, max_pages, workers)
+        except RuntimeError as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(5 * (attempt + 1))
+    raise last_err if last_err else RuntimeError("行情列表获取失败")
+
+
+def _fetch_spot_all_impl(pz=100, max_pages=80, workers=6):
+    """实际拉取逻辑（单次尝试）。"""
     stocks, host, total = [], None, None
     for h in CLIST_HOSTS:
         try:
