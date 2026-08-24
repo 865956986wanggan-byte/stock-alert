@@ -57,14 +57,46 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+SPOT_CACHE_PATH = os.path.join(OUT_DIR, "spot_cache.json")
+
+
+def _save_spot_cache(cands):
+    try:
+        os.makedirs(os.path.dirname(SPOT_CACHE_PATH), exist_ok=True)
+        slim = [{
+            "code": s.get("code"), "name": s.get("name", ""),
+            "price": s.get("price"), "pct_chg": s.get("pct_chg"),
+            "turnover": s.get("turnover"), "total_mv": s.get("total_mv"),
+        } for s in cands]
+        with open(SPOT_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(slim, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def _load_spot_cache():
+    try:
+        with open(SPOT_CACHE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def run_once(cfg, do_notify=True, prev_seen=None, cache_ttl=None):
     st = strategy.MaBreakoutStrategy(cfg)
     t0 = time.time()
     data_source.set_kline_cache_dir(os.path.join(OUT_DIR, "kline_cache"))
     print("==> 获取全市场实时快照 ...")
-    spots = data_source.fetch_spot_all()
-    print(f"    全市场 {len(spots)} 只，粗筛中 ...")
-    cands = st.filter_candidates(spots)
+    try:
+        spots = data_source.fetch_spot_all()
+        print(f"    全市场 {len(spots)} 只，粗筛中 ...")
+        cands = st.filter_candidates(spots)
+        _save_spot_cache(cands)
+    except Exception as e:  # noqa: BLE001
+        print(f"    行情列表获取失败（{e}），改用上次成功保存的候选列表 ...")
+        cands = _load_spot_cache()
+        if not cands:
+            raise RuntimeError("行情列表获取失败且无本地缓存可用") from e
     print(f"    粗筛后 {len(cands)} 只，开始拉取日K线（带缓存）...")
     codes = [s["code"] for s in cands]
     ttl = cfg.get("cache_ttl_min", 60) if cache_ttl is None else cache_ttl
