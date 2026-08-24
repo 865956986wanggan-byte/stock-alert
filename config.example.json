@@ -6,21 +6,21 @@
     30,
     60
   ],
-  "cluster_pct": 4.0,
+  "cluster_pct": 4,
   "converge_min_days": 3,
   "converge_max_days": 60,
-  "base_range_pct": 18.0,
+  "base_range_pct": 18,
   "breakout_lookback": 3,
   "volume_ratio": 1.5,
-  "min_breakout_gain": 1.0,
-  "min_price": 2.0,
-  "max_price": 600.0,
+  "min_breakout_gain": 1,
+  "min_price": 2,
+  "max_price": 600,
   "exclude_st": true,
   "min_list_days": 60,
   "min_turnover": 0.5,
-  "max_turnover": 30.0,
-  "min_market_cap_yi": 30.0,
-  "min_score": 60.0,
+  "max_turnover": 30,
+  "min_market_cap_yi": 30,
+  "min_score": 60,
   "fetch_workers": 8,
   "request_delay": 0.08,
   "cache_ttl_min": 60,
@@ -53,5 +53,6 @@
       "to": ""
     }
   },
-  "notify_when_empty": true
+  "notify_when_empty": true,
+  "adjust_intraday_volume": true
 }
