@@ -40,6 +40,135 @@ def sma(values, n):
     return np.convolve(values, np.ones(n) / n, mode="valid")
 
 
+
+# 技术面体检清单（把用户的技术面框架量化为可自动判断的检查项）
+# ------------------------------------------------------------------
+def _ema(values, n):
+    """指数移动平均（按完整序列计算，返回与输入等长的数组）"""
+    out = np.empty_like(values, dtype=float)
+    out[0] = values[0]
+    k = 2.0 / (n + 1)
+    for i in range(1, len(values)):
+        out[i] = values[i] * k + out[i - 1] * (1 - k)
+    return out
+
+
+def _macd(closes):
+    """MACD(12,26,9)：返回 (dif, dea) 数组"""
+    dif = _ema(closes, 12) - _ema(closes, 26)
+    dea = _ema(dif, 9)
+    return dif, dea
+
+
+def _rsi(closes, n=14):
+    """RSI（Wilder 平滑）"""
+    if len(closes) < n + 1:
+        return np.full(len(closes), np.nan)
+    diffs = np.diff(closes)
+    gains = np.where(diffs > 0, diffs, 0.0)
+    losses = np.where(diffs < 0, -diffs, 0.0)
+    avg_gain = np.convolve(gains, np.ones(n) / n, mode="valid")
+    avg_loss = np.convolve(losses, np.ones(n) / n, mode="valid")
+    for i in range(1, len(avg_gain)):
+        avg_gain[i] = (avg_gain[i - 1] * (n - 1) + gains[i + n - 1]) / n
+        avg_loss[i] = (avg_loss[i - 1] * (n - 1) + losses[i + n - 1]) / n
+    rs = np.where(avg_loss == 0, np.inf, avg_gain / np.maximum(avg_loss, 1e-10))
+    out = np.full(len(closes), np.nan)
+    out[n:] = 100.0 - 100.0 / (1.0 + rs)
+    return out
+
+
+def evaluate_technical_checklist(closes, volumes, highs, lows, opens, pcts, mas, b, vol_ratio):
+    """按用户技术面框架逐项体检，返回 {label: (ok, detail)}。"""
+    n = len(closes)
+    now = n - 1
+    chk = {}
+    ma5, ma10, ma20 = mas[5][now], mas[10][now], mas[20][now]
+    ma60 = mas[60][now] if 60 in mas and not np.isnan(mas[60][now]) else None
+
+    if ma60 is not None:
+        ma60_prev = mas[60][max(0, now - 10)]
+        chk["60日线走平/向上"] = (ma60 >= ma60_prev * 0.995, f"MA60 {ma60:.2f}->{ma60_prev:.2f}")
+        chk["站上60日线"] = (closes[now] > ma60, f"收盘{closes[now]:.2f} vs MA60 {ma60:.2f}")
+    else:
+        chk["60日线向上"] = (None, "上市不足60日")
+        chk["站上60日线"] = (None, "上市不足60日")
+    chk["站上20日线"] = (closes[now] > ma20, f"收盘{closes[now]:.2f} vs MA20 {ma20:.2f}")
+    chk["多头排列"] = (ma5 > ma10 > ma20, f"MA5 {ma5:.2f}/MA10 {ma10:.2f}/MA20 {ma20:.2f}")
+    chk["MA5>MA20"] = (ma5 > ma20, f"MA5 {ma5:.2f} vs MA20 {ma20:.2f}")
+
+    if n >= 40:
+        rh = max(highs[-20:]); ph = max(highs[-40:-20])
+        rl = min(lows[-20:]);  pl = min(lows[-40:-20])
+        chk["上升结构"] = (rh > ph * 0.995 and rl > pl * 0.995,
+                          f"近高{rh:.2f}/前高{ph:.2f} 近低{rl:.2f}/前低{pl:.2f}")
+    else:
+        chk["上升结构"] = (None, "数据不足")
+
+    chk["突破放量"] = (vol_ratio >= 1.5, f"量比{vol_ratio:.2f}")
+    win_s = max(0, n - 25)
+    wv = volumes[win_s:n]; wp = pcts[win_s:n]
+    up_v = wv[wp > 0]; down_v = wv[wp <= 0]
+    if len(up_v) > 2 and len(down_v) > 2:
+        chk["回调缩量"] = (down_v.mean() < up_v.mean(), f"涨均量{up_v.mean():.0f}/跌均量{down_v.mean():.0f}")
+    else:
+        chk["回调缩量"] = (None, "样本不足")
+
+    if n > 35:
+        dif, dea = _macd(closes)
+        chk["MACD零轴上方"] = (dif[now] > 0 and dea[now] > 0, f"DIF {dif[now]:.3f}/DEA {dea[now]:.3f}")
+        seg_c = closes[-20:]; seg_d = dif[-20:]
+        ci = int(np.argmax(seg_c)); di = int(np.argmax(seg_d))
+        divergence = ci > di
+        chk["MACD无顶背离"] = (not divergence, "顶背离" if divergence else "正常")
+    else:
+        chk["MACD零轴上方"] = (None, "数据不足")
+        chk["MACD无顶背离"] = (None, "数据不足")
+
+
+    if n > 20:
+        r = _rsi(closes, 14)[now]
+        if np.isnan(r):
+            chk["RSI>50多头"] = (None, "数据不足")
+            chk["RSI不超买"] = (None, "数据不足")
+        else:
+            chk["RSI>50多头"] = (r > 50, f"RSI {r:.1f}")
+            chk["RSI不超买"] = (r < 70, f"RSI {r:.1f}")
+    else:
+        chk["RSI>50多头"] = (None, "数据不足")
+        chk["RSI不超买"] = (None, "数据不足")
+
+    bias = (closes[now] - ma20) / ma20 * 100 if ma20 > 0 else 0
+    chk["乖离不过大"] = (bias < 15, f"乖离 {bias:.1f}%")
+
+    body = abs(closes[now] - opens[now])
+    avg5 = float(volumes[-6:-1].mean()) if n >= 6 else float(volumes[now])
+    big_red = pcts[now] < -3 and volumes[now] > 1.8 * avg5
+    chk["无放量大阴线"] = (not big_red, "放量大阴线" if big_red else "无")
+    up_shadow = highs[now] - max(opens[now], closes[now])
+    long_up = up_shadow > 2 * body and body > 0 and highs[now] >= max(highs[-20:]) * 0.97
+    chk["无长上影"] = (not long_up, "长上影" if long_up else "无")
+
+    pullback = any(closes[i] < ma20 for i in range(max(0, n - 5), n))
+    stop_found = False
+    for i in range(max(0, n - 6), n):
+        bd = abs(closes[i] - opens[i])
+        lower_shadow = min(opens[i], closes[i]) - lows[i]
+        if lower_shadow > 2 * bd and bd > 0 and volumes[i] < avg5 * 1.2:
+            stop_found = True
+            break
+    if pullback:
+        chk["回踩止跌信号"] = (stop_found, "有止跌K线" if stop_found else "未见止跌K线")
+    else:
+        chk["回踩止跌信号"] = (None, "近期无回踩")
+
+    # 统一转成 Python bool，避免 np.bool_ 判断问题
+    out = {}
+    for k, (ok, det) in chk.items():
+        out[k] = (bool(ok) if ok is not None else None, det)
+    return out
+
+
 class MaBreakoutStrategy:
     def __init__(self, cfg):
         self.periods = cfg.get("ma_periods", [5, 10, 20, 30, 60])
@@ -59,6 +188,8 @@ class MaBreakoutStrategy:
         self.min_mv = float(cfg.get("min_market_cap_yi", 30.0))        # 总市值下限（亿）
         self.min_score = float(cfg.get("min_score", 60.0))             # 入选最低评分
         self.adjust_intraday_volume = bool(cfg.get("adjust_intraday_volume", True))  # 盘中量能按时间折算
+        self.show_checklist = bool(cfg.get("show_checklist", True))          # 推送时附带技术面体检清单
+        self.require_core = bool(cfg.get("require_core_conditions", True))  # 核心条件不满足则过滤
 
     # ------------------------------------------------------------------
     def _build_mas(self, closes):
@@ -101,6 +232,9 @@ class MaBreakoutStrategy:
 
         closes = np.array([b["close"] for b in bars], dtype=float)
         volumes = np.array([b["volume"] for b in bars], dtype=float)
+        highs = np.array([b["high"] for b in bars], dtype=float)
+        lows = np.array([b["low"] for b in bars], dtype=float)
+        opens = np.array([b["open"] for b in bars], dtype=float)
         pcts = np.array([b["pct_chg"] for b in bars], dtype=float)
         n = len(closes)
         mas = self._build_mas(closes)
@@ -215,6 +349,19 @@ class MaBreakoutStrategy:
             "first_break": bool(first_break),
             "score": round(float(score), 1),
         }
+        if self.show_checklist:
+            try:
+                chk = evaluate_technical_checklist(closes, volumes, highs, lows, opens, pcts, mas, b, vol_ratio)
+                result["checklist"] = chk
+                core_items = ["60日线走平/向上", "站上60日线", "站上20日线", "MA5>MA20"]
+                core_fail = [k for k in core_items if chk.get(k) and chk[k][0] is False]
+                result["core_fail"] = core_fail
+                result["check_pass"] = sum(1 for v in chk.values() if v[0] is True)
+                result["check_total"] = sum(1 for v in chk.values() if v[0] is not None)
+            except Exception:  # noqa: BLE001
+                pass
+            if self.require_core and result.get("core_fail"):
+                return None
         if spot:
             result["spot_pct"] = spot.get("pct_chg")
             result["spot_vol_ratio"] = spot.get("vol_ratio")
