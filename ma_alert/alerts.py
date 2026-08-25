@@ -28,11 +28,15 @@ def _post_raw(url, body, headers=None, timeout=15):
         return r.read().decode("utf-8", "ignore")
 
 
-def build_text(hits):
+def build_text(hits, market=None):
     """把命中结果拼成可读文本（用于控制台/推送）。"""
+    if market:
+        head = [market.get("text", ""), "=" * 46]
+    else:
+        head = ["=" * 46]
     if not hits:
-        return "今日均线粘合向上变盘：暂无符合条件的股票。"
-    lines = [f"均线粘合向上变盘提醒（{len(hits)} 只，按评分排序）", "=" * 46]
+        return "\n".join(head + ["均线粘合向上变盘：暂无符合条件的股票。"])
+    lines = head + [f"均线粘合向上变盘提醒（{len(hits)} 只，按评分排序）", "=" * 46]
     for i, h in enumerate(hits, 1):
         lines.append(
             f"{i}. {h['name']}({h['code']}) 评分{h['score']} 现价{h['price']} "
@@ -42,6 +46,14 @@ def build_text(hits):
             f"   突破日{h['breakout_date']}({h['days_ago']}天前) 涨幅{h['breakout_gain']:+.2f}% "
             f"粘合度{h['cluster_pct']}% 粘合{h['converge_days']}天 量比{h['vol_ratio']:.2f}"
         )
+        if h.get("checklist"):
+            chk = h["checklist"]
+            passed = sum(1 for v in chk.values() if v[0] is True)
+            total = sum(1 for v in chk.values() if v[0] is not None)
+            fails = [k for k, v in chk.items() if v[0] is False]
+            lines.append(f"   技术面 ✅{passed}/{total} 通过" + (("，❌ " + "、".join(fails)) if fails else "，全部通过"))
+        if h.get("core_fail"):
+            lines.append("   ⚠️ 核心条件未全满足：" + "、".join(h["core_fail"]))
     return "\n".join(lines)
 
 
@@ -130,9 +142,9 @@ def send_email(cfg, title, content):
     return True
 
 
-def notify(cfg, hits):
+def notify(cfg, hits, market=None):
     """按配置依次触发所有提醒渠道，返回各渠道是否成功。"""
-    text = build_text(hits)
+    text = build_text(hits, market=market)
     if hits:
         title = f"🎯 均线粘合向上变盘 {len(hits)} 只"
     else:
