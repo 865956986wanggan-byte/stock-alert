@@ -1,10 +1,7 @@
 {
-  "date": "2026-08-24",
-  "runs": 2,
+  "date": "2026-08-25",
+  "runs": 1,
   "ok": 1,
-  "errors": [
-    "13:33 失败: 'set' object has no attribute 'get'"
-  ],
-  "pushed": 9,
-  "summary_sent": true
+  "errors": [],
+  "pushed": 1
 }
