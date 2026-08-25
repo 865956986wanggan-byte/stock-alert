@@ -82,6 +82,26 @@ def _load_spot_cache():
         return None
 
 
+def _eval_market():
+    """大盘环境：上证指数是否站上20日线、20日线是否向上。"""
+    try:
+        bars = data_source.fetch_index_kline()
+        if len(bars) < 30:
+            return None
+        closes = [b["close"] for b in bars]
+        ma20 = sum(closes[-20:]) / 20
+        ma20_prev = sum(closes[-25:-5]) / 20
+        above = closes[-1] > ma20
+        up = ma20 > ma20_prev
+        if above and up:
+            return {"ok": True, "text": "大盘：上证指数站上20日线且20日线向上 ✅"}
+        if above:
+            return {"ok": None, "text": "大盘：站上20日线但20日线走平 ⚠️"}
+        return {"ok": False, "text": "大盘：上证指数在20日线下方，环境偏弱 ⚠️ 谨慎参与"}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def run_once(cfg, do_notify=True, prev_seen=None, cache_ttl=None):
     st = strategy.MaBreakoutStrategy(cfg)
     t0 = time.time()
@@ -125,16 +145,17 @@ def run_once(cfg, do_notify=True, prev_seen=None, cache_ttl=None):
     print("报告：", files["html"])
 
     if do_notify:
+        mkt = _eval_market()
         if prev_seen is not None:
             # watch 模式：只提醒新信号
             old = set(prev_seen.get("signals", []))
             new_hits = [h for h in hits if f"{h['code']}|{h['breakout_date']}" not in old]
             if new_hits:
-                alerts.notify(cfg, new_hits)
+                alerts.notify(cfg, new_hits, market=mkt)
             else:
                 print("（无新信号，不重复提醒）")
         else:
-            alerts.notify(cfg, hits)
+            alerts.notify(cfg, hits, market=mkt)
     return hits, report_date
 
 
