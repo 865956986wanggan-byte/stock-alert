@@ -236,6 +236,35 @@ def _kline_sina(code, lmt=400):
     return "", bars
 
 
+def fetch_index_kline(code="sh000001", lmt=100):
+    """获取大盘指数日K线（腾讯行情），用于环境过滤。返回 [{date, open, close, high, low, volume}]"""
+    end = datetime.date.today().isoformat()
+    data, last_err = None, None
+    for host in KLINE_TX_HOSTS:
+        try:
+            url = f"{host}?param={code},day,2025-01-01,{end},{lmt},qfq"
+            data = _get_json(url, retries=1, timeout=10)
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    if data is None:
+        raise RuntimeError(f"指数行情不可用: {last_err}")
+    node = ((data or {}).get("data") or {}).get(code) or {}
+    raw = node.get("qfqday") or node.get("day") or []
+    bars = []
+    for p in raw:
+        if len(p) < 6:
+            continue
+        try:
+            bars.append({
+                "date": p[0], "open": float(p[1]), "close": float(p[2]),
+                "high": float(p[3]), "low": float(p[4]), "volume": float(p[5]),
+            })
+        except (TypeError, ValueError):
+            continue
+    return bars
+
+
 def secid_of(code):
     """东方财富 secid: 沪市 1.xxxxxx, 深市/北交所 0.xxxxxx"""
     if code.startswith(("6", "9")):
