@@ -54,5 +54,7 @@
     }
   },
   "notify_when_empty": true,
-  "adjust_intraday_volume": true
+  "adjust_intraday_volume": true,
+  "show_checklist": true,
+  "require_core_conditions": true
 }
