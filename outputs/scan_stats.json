@@ -1,7 +1,8 @@
 {
   "date": "2026-08-26",
-  "runs": 3,
-  "ok": 3,
+  "runs": 4,
+  "ok": 4,
   "errors": [],
-  "pushed": 0
+  "pushed": 0,
+  "summary_sent": true
 }
