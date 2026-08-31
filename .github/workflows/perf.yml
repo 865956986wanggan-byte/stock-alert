@@ -1,0 +1,29 @@
+name: 推送表现复盘
+
+on:
+  schedule:
+    # 北京时间 15:10 = UTC 07:10，周三/周四各跑一次
+    - cron: '10 7 * * 3'
+    - cron: '10 7 * * 4'
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: pip install pandas numpy
+
+      - name: 计算推送表现并推送到微信（失败自动告警）
+        env:
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+        run: |
+          python ma_alert/main.py perf > /tmp/perf.log 2>&1 \
+            || python ma_alert/main.py alertfail "$(tail -c 600 /tmp/perf.log)"
