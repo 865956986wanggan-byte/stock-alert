@@ -285,6 +285,106 @@ def alert_fail(cfg, err_text=""):
         print("失败警告发送出错:", e)
 
 
+
+PERF_PUSH = {
+    "002327|2026-08-24": "2026-08-24", "002423|2026-08-24": "2026-08-24",
+    "002818|2026-08-24": "2026-08-24", "301090|2026-08-20": "2026-08-23",
+    "600908|2026-08-24": "2026-08-24", "601568|2026-08-24": "2026-08-24",
+    "601963|2026-08-20": "2026-08-23", "603167|2026-08-24": "2026-08-24",
+    "603225|2026-08-24": "2026-08-24", "688139|2026-08-20": "2026-08-23",
+    "603639|2026-08-20": "2026-08-23", "000905|2026-08-25": "2026-08-25",
+    "603408|2026-08-24": "2026-08-25", "002500|2026-08-26": "2026-08-28",
+    "600179|2026-08-26": "2026-08-28", "603225|2026-08-27": "2026-08-28",
+    "002386|2026-08-28": "2026-08-28", "600887|2026-08-27": "2026-08-28",
+    "603323|2026-08-26": "2026-08-31", "002206|2026-08-28": "2026-08-31",
+    "002267|2026-08-31": "2026-08-31", "600016|2026-08-31": "2026-08-31",
+    "600031|2026-08-31": "2026-08-31", "600551|2026-08-28": "2026-08-31",
+    "601169|2026-08-31": "2026-08-31", "601696|2026-08-27": "2026-08-31",
+}
+PERF_NAMES = {
+    "301090": "华润材料", "601963": "重庆银行", "688139": "海尔生物", "603639": "海利尔",
+    "002327": "富安娜", "002423": "中粮资本", "002818": "富森美", "600908": "无锡银行",
+    "601568": "北元化工", "603167": "渤海轮渡", "603225": "新凤鸣", "000905": "厦门港务",
+    "603408": "建霖家居", "002500": "山西证券", "600179": "安通控股", "002386": "天原股份",
+    "600887": "伊利股份", "603323": "苏农银行", "002206": "海利得", "002267": "陕天然气",
+    "600016": "民生银行", "600031": "三一重工", "600551": "时代出版", "601169": "北京银行",
+    "601696": "中银证券",
+}
+
+
+def _fetch_kline_retry(code, lmt=320, tries=3):
+    import time
+    for i in range(tries):
+        try:
+            _, bars = data_source.fetch_kline(code, lmt=lmt)
+            if bars:
+                return bars
+        except Exception:
+            pass
+        time.sleep(2)
+    return []
+
+
+def run_perf(cfg):
+    """推送表现复盘：统计推送后第1、2、3个交易日的涨跌命中率，推送到微信。"""
+    codes = sorted({s.split("|")[0] for s in PERF_PUSH})
+    rows = []
+    skipped = []
+    for code in codes:
+        bars = _fetch_kline_retry(code)
+        if not bars:
+            skipped.append(code)
+            continue
+        dates = [b["date"] for b in bars]
+        for sig, pdate in PERF_PUSH.items():
+            if sig.split("|")[0] != code:
+                continue
+            d0 = pdate
+            if d0 not in dates:
+                after = [d for d in dates if d > pdate]
+                if not after:
+                    skipped.append(code)
+                    continue
+                d0 = after[0]
+            i0 = dates.index(d0)
+            def close_at(k):
+                return bars[i0 + k]["close"] if i0 + k < len(bars) else None
+            c0 = bars[i0]["close"]
+            c1 = close_at(1); c2 = close_at(2); c3 = close_at(3)
+            rows.append({
+                "name": PERF_NAMES.get(code, code), "code": code, "p": pdate,
+                "chg1": (c1 / c0 - 1) * 100 if c1 else None,
+                "chg2": (c2 / c1 - 1) * 100 if c1 and c2 else None,
+                "chg3": (c3 / c2 - 1) * 100 if c2 and c3 else None,
+            })
+    ev = [r for r in rows if r["chg1"] is not None and r["chg2"] is not None]
+    wait = [r for r in rows if r["chg1"] is not None and r["chg2"] is None]
+    n = len(ev)
+    pct = lambda x: f"{x / n * 100:.1f}%" if n else "-"
+    h2 = sum(1 for r in ev if r["chg1"] > 0 and r["chg2"] > 0)
+    h3 = sum(1 for r in ev if r["chg3"] is not None and r["chg1"] > 0 and r["chg2"] > 0 and r["chg3"] > 0)
+    up1 = sum(1 for r in ev if r["chg1"] > 0)
+    lines = [f"📊 推送表现复盘（{min(r['p'] for r in rows)}~{max(r['p'] for r in rows)}，共{len(rows)}条）",
+             f"可评估（已满2个交易日）{n} 条",
+             f"✅ 第1、2天连续上涨：{h2}/{n} = {pct(h2)}",
+             f"📈 第1天上涨：{up1}/{n} = {pct(up1)}",
+             f"🚀 第1、2、3天连续上涨：{h3}/{n} = {pct(h3)}",
+             "-----"]
+    for r in ev:
+        m = "✅" if r["chg1"] > 0 and r["chg2"] > 0 else "❌"
+        lines.append(f"{m} {r['name']}({r['code']}) 推{r['p'][5:]} D1 {r['chg1']:+.1f}% D2 {r['chg2']:+.1f}%")
+    if wait:
+        lines.append("⏳ 待观察：" + "、".join(f"{r['name']}" for r in wait))
+    if skipped:
+        lines.append("⚠️ 数据缺失待补：" + "、".join(sorted(set(skipped))))
+    text = "\n".join(lines)
+    print(text)
+    try:
+        alerts.send_text(cfg, "A股均线粘合 · 推送表现复盘", text)
+    except Exception as e:
+        print("复盘推送失败:", e)
+
+
 def watch_loop(cfg):
     interval = int(cfg.get("watch_interval_min", 5))
     state = load_state()
@@ -375,6 +475,9 @@ def main():
         return
     if mode == "scan":
         run_scan(cfg)
+        return
+    if mode == "perf":
+        run_perf(cfg)
         return
     if mode == "alertfail":
         alert_fail(cfg, sys.argv[2] if len(sys.argv) > 2 else "")
