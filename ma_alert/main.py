@@ -225,6 +225,15 @@ def _send_scan_summary(cfg, stats):
     else:
         lines.append("✅ 全部扫描正常")
     lines.append(f"今日推送新信号 {stats.get('pushed', 0)} 条")
+    # 周三/周四附加推送表现复盘（并入总结，不单独推送，保持每日<=5条）
+    try:
+        wd = _beijing_now().weekday()
+        if wd in (2, 3):
+            head, _, _ = _perf_stats()
+            lines.append("-----")
+            lines.extend(head)
+    except Exception:  # noqa: BLE001
+        pass
     text = "\n".join(lines)
     try:
         alerts.send_text(cfg, "A股均线粘合 · 收盘总结", text)
@@ -325,8 +334,8 @@ def _fetch_kline_retry(code, lmt=320, tries=3):
     return []
 
 
-def run_perf(cfg):
-    """推送表现复盘：统计推送后第1、2、3个交易日的涨跌命中率，推送到微信。"""
+def _perf_stats():
+    """计算推送表现统计，返回 (headline_lines, detail_lines, rows)。"""
     codes = sorted({s.split("|")[0] for s in PERF_PUSH})
     rows = []
     skipped = []
@@ -351,12 +360,10 @@ def run_perf(cfg):
                 return bars[i0 + k]["close"] if i0 + k < len(bars) else None
             c0 = bars[i0]["close"]
             c1 = close_at(1); c2 = close_at(2); c3 = close_at(3)
-            rows.append({
-                "name": PERF_NAMES.get(code, code), "code": code, "p": pdate,
-                "chg1": (c1 / c0 - 1) * 100 if c1 else None,
-                "chg2": (c2 / c1 - 1) * 100 if c1 and c2 else None,
-                "chg3": (c3 / c2 - 1) * 100 if c2 and c3 else None,
-            })
+            rows.append({"name": PERF_NAMES.get(code, code), "code": code, "p": pdate,
+                         "chg1": (c1 / c0 - 1) * 100 if c1 else None,
+                         "chg2": (c2 / c1 - 1) * 100 if c1 and c2 else None,
+                         "chg3": (c3 / c2 - 1) * 100 if c2 and c3 else None})
     ev = [r for r in rows if r["chg1"] is not None and r["chg2"] is not None]
     wait = [r for r in rows if r["chg1"] is not None and r["chg2"] is None]
     n = len(ev)
@@ -364,24 +371,29 @@ def run_perf(cfg):
     h2 = sum(1 for r in ev if r["chg1"] > 0 and r["chg2"] > 0)
     h3 = sum(1 for r in ev if r["chg3"] is not None and r["chg1"] > 0 and r["chg2"] > 0 and r["chg3"] > 0)
     up1 = sum(1 for r in ev if r["chg1"] > 0)
-    lines = [f"📊 推送表现复盘（{min(r['p'] for r in rows)}~{max(r['p'] for r in rows)}，共{len(rows)}条）",
-             f"可评估（已满2个交易日）{n} 条",
-             f"✅ 第1、2天连续上涨：{h2}/{n} = {pct(h2)}",
-             f"📈 第1天上涨：{up1}/{n} = {pct(up1)}",
-             f"🚀 第1、2、3天连续上涨：{h3}/{n} = {pct(h3)}",
-             "-----"]
+    head = [f"📊 推送表现复盘（{min(r['p'] for r in rows)}~{max(r['p'] for r in rows)}，共{len(rows)}条）",
+            f"✅ 第1、2天连续上涨：{h2}/{n} = {pct(h2)}",
+            f"📈 第1天上涨：{up1}/{n} = {pct(up1)}",
+            f"🚀 第1、2、3天连续上涨：{h3}/{n} = {pct(h3)}"]
+    det = []
     for r in ev:
         m = "✅" if r["chg1"] > 0 and r["chg2"] > 0 else "❌"
-        lines.append(f"{m} {r['name']}({r['code']}) 推{r['p'][5:]} D1 {r['chg1']:+.1f}% D2 {r['chg2']:+.1f}%")
+        det.append(f"{m} {r['name']}({r['code']}) D1 {r['chg1']:+.1f}% D2 {r['chg2']:+.1f}%")
     if wait:
-        lines.append("⏳ 待观察：" + "、".join(f"{r['name']}" for r in wait))
+        det.append("⏳ 待观察：" + "、".join(f"{r['name']}" for r in wait))
     if skipped:
-        lines.append("⚠️ 数据缺失待补：" + "、".join(sorted(set(skipped))))
-    text = "\n".join(lines)
+        det.append("⚠️ 数据缺失待补：" + "、".join(sorted(set(skipped))))
+    return head, det, rows
+
+
+def run_perf(cfg):
+    """推送表现复盘：统计推送后第1、2、3个交易日的涨跌命中率，推送到微信。"""
+    head, det, rows = _perf_stats()
+    text = "\n".join(head + ["-----"] + det)
     print(text)
     try:
         alerts.send_text(cfg, "A股均线粘合 · 推送表现复盘", text)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print("复盘推送失败:", e)
 
 
