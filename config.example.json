@@ -12,12 +12,12 @@
   "base_range_pct": 18,
   "breakout_lookback": 3,
   "volume_ratio": 1.5,
-  "min_breakout_gain": 1,
+  "min_breakout_gain": 2.0,
   "min_price": 2,
   "max_price": 600,
   "exclude_st": true,
   "min_list_days": 60,
-  "min_turnover": 0.5,
+  "min_turnover": 2.0,
   "max_turnover": 30,
   "min_market_cap_yi": 30,
   "min_score": 60,
@@ -56,5 +56,7 @@
   "notify_when_empty": true,
   "adjust_intraday_volume": true,
   "show_checklist": true,
-  "require_core_conditions": true
+  "require_core_conditions": true,
+  "min_amount_yi": 1.0,
+  "min_amp_pct": 1.8
 }
