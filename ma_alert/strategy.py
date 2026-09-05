@@ -185,6 +185,8 @@ class MaBreakoutStrategy:
         self.min_list_days = int(cfg.get("min_list_days", 60))         # 上市至少 N 个交易日
         self.min_turnover = float(cfg.get("min_turnover", 0.5))        # 换手率下限 %
         self.max_turnover = float(cfg.get("max_turnover", 30.0))       # 换手率上限 %
+        self.min_amount_yi = float(cfg.get("min_amount_yi", 1.0))       # 成交额下限（亿，人气）
+        self.min_amp_pct = float(cfg.get("min_amp_pct", 1.8))           # 近10日日均振幅下限 %（排除织布机）
         self.min_mv = float(cfg.get("min_market_cap_yi", 30.0))        # 总市值下限（亿）
         self.min_score = float(cfg.get("min_score", 60.0))             # 入选最低评分
         self.adjust_intraday_volume = bool(cfg.get("adjust_intraday_volume", True))  # 盘中量能按时间折算
@@ -291,6 +293,12 @@ class MaBreakoutStrategy:
         if vol_ratio < self.volume_ratio:
             return None
 
+        # 织布机排除：近10日日均振幅过低 = 股价几乎不动（低人气）
+        if self.min_amp_pct > 0 and n >= 10:
+            amp_win = (highs[n - 10:n] - lows[n - 10:n]) / np.maximum(closes[n - 10:n], 1e-9) * 100
+            if float(np.mean(amp_win)) < self.min_amp_pct:
+                return None
+
         # 5) 短期趋势向上：MA5 > MA10
         ma5, ma10 = float(mas[5][b]), float(mas[10][b])
         ma20 = float(mas[20][b])
@@ -391,9 +399,17 @@ class MaBreakoutStrategy:
             vr = s.get("vol_ratio")
             if not isinstance(vr, (int, float)) or vr < 1.0:
                 continue
+            # 人气过滤：换手率/成交额按盘中已交易时间折算为全天口径再判断
+            factor = _intraday_volume_factor(_beijing_now())
             to = s.get("turnover")
-            if isinstance(to, (int, float)) and not (self.min_turnover <= to <= self.max_turnover):
-                continue
+            if isinstance(to, (int, float)):
+                eff_to = to * factor
+                if not (self.min_turnover <= eff_to <= self.max_turnover):
+                    continue
+            amt = s.get("amount")
+            if isinstance(amt, (int, float)) and amt > 0:
+                if amt * factor / 1e8 < self.min_amount_yi:
+                    continue
             mv = s.get("total_mv")
             if isinstance(mv, (int, float)) and mv > 0 and mv / 1e8 < self.min_mv:
                 continue
