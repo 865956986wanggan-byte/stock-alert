@@ -1,8 +1,9 @@
 {
-  "date": "2026-09-07",
-  "runs": 5,
-  "ok": 5,
-  "errors": [],
-  "pushed": 1,
-  "summary_sent": true
+  "date": "2026-09-08",
+  "runs": 1,
+  "ok": 0,
+  "errors": [
+    "02:06 失败: cannot access local variable 'spots' where it is not associated with a value"
+  ],
+  "pushed": 0
 }
