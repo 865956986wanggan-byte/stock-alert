@@ -58,5 +58,14 @@
   "show_checklist": true,
   "require_core_conditions": true,
   "min_amount_yi": 1.0,
-  "min_amp_pct": 1.8
+  "min_amp_pct": 1.8,
+  "strategy_mode": "pullback",
+  "big_day_pct": 5.0,
+  "pullback_dlo": 2.0,
+  "pullback_dhi": 10.0,
+  "shrink_ratio": 0.6,
+  "require_pullback_yang": true,
+  "require_above_ma5": true,
+  "require_market_up": true,
+  "pullback_min_days": 1
 }
