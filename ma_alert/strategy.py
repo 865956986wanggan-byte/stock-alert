@@ -431,3 +431,143 @@ class MaBreakoutStrategy:
                 hits.append(r)
         hits.sort(key=lambda x: x["score"], reverse=True)
         return hits
+
+class PullbackStrategy(MaBreakoutStrategy):
+    """强势股缩量回踩（龙回头）策略 —— 回测胜率显著高于底部粘合突破。
+
+    逻辑：
+      1. 中期趋势向上：MA20 向上、收盘站上 MA20；
+      2. 强势基因：近10日内出现过放量大涨日（涨幅>=阈值 且 量>=2倍5日均量）；
+      3. 缩量回踩：从大涨日后高点回撤 2%~10%，且近3日成交量明显萎缩；
+      4. 企稳：今日收阳（可选）、站上 MA5（可选）；
+      5. 人气/织布机过滤：换手率、成交额、日均振幅；
+      6. 大盘环境：上证指数站上20日线且20日线向上（可设为硬性）。
+    """
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.big_day_pct = float(cfg.get("big_day_pct", 5.0))        # 大涨日最小涨幅 %
+        self.pullback_dlo = float(cfg.get("pullback_dlo", 2.0))      # 回撤下限 %
+        self.pullback_dhi = float(cfg.get("pullback_dhi", 10.0))     # 回撤上限 %
+        self.shrink_ratio = float(cfg.get("shrink_ratio", 0.6))      # 近3日量 < 大涨日量*此值
+        self.require_yang = bool(cfg.get("require_pullback_yang", True))  # 企稳日需收阳
+        self.require_ma5 = bool(cfg.get("require_above_ma5", True))       # 企稳日需站上MA5
+        self.require_market_up = bool(cfg.get("require_market_up", True)) # 大盘强为硬性条件
+        self.pullback_min_days = int(cfg.get("pullback_min_days", 1))   # 大涨日至少N天前（真回踩）
+
+    def analyze(self, code, name, bars, spot=None):
+        need = 70
+        if len(bars) < need:
+            return None
+        if self.exclude_st and ("ST" in name.upper() or "退" in name):
+            return None
+        if name.startswith(("N", "C")):
+            return None
+        closes = np.array([b["close"] for b in bars], dtype=float)
+        highs = np.array([b["high"] for b in bars], dtype=float)
+        lows = np.array([b["low"] for b in bars], dtype=float)
+        opens = np.array([b["open"] for b in bars], dtype=float)
+        volumes = np.array([b["volume"] for b in bars], dtype=float)
+        pcts = np.array([b["pct_chg"] for b in bars], dtype=float)
+        n = len(closes)
+        mas = self._build_mas(closes)
+        ma5, ma10, ma20 = mas[5][n-1], mas[10][n-1], mas[20][n-1]
+        if np.isnan(ma5) or np.isnan(ma10) or np.isnan(ma20):
+            return None
+
+        # 织布机/人气：近10日日均振幅
+        if self.min_amp_pct > 0:
+            amp = (highs[n-10:n] - lows[n-10:n]) / np.maximum(closes[n-10:n], 1e-9) * 100
+            if float(np.mean(amp)) < self.min_amp_pct:
+                return None
+        # 人气：换手率/成交额（时间折算）
+        if spot:
+            factor = _intraday_volume_factor(_beijing_now())
+            to = spot.get("turnover")
+            if isinstance(to, (int, float)) and to * factor < self.min_turnover:
+                return None
+            amt = spot.get("amount")
+            if isinstance(amt, (int, float)) and amt > 0 and amt * factor / 1e8 < self.min_amount_yi:
+                return None
+
+        # 1) 趋势
+        if not (ma20 > mas[20][n-6] and closes[n-1] > ma20):
+            return None
+
+        # 2) 强势基因：近10日放量大涨日
+        strong = None
+        max_strong = n - 1 - self.pullback_min_days
+        for j in range(n-11, max_strong + 1):
+            if j < 1:
+                continue
+            base5 = float(np.mean(volumes[j-5:j-1])) if j >= 5 else float(np.mean(volumes[:j]))
+            if closes[j]/closes[j-1]-1 >= self.big_day_pct/100 and volumes[j] >= 2.0*base5:
+                strong = j
+                break
+        if strong is None:
+            return None
+
+        # 3) 缩量回踩
+        hi = float(np.max(highs[strong:n]))
+        dd = (hi - closes[n-1]) / hi * 100 if hi > 0 else 0
+        if not (self.pullback_dlo <= dd <= self.pullback_dhi):
+            return None
+        recent_vol = float(np.mean(volumes[n-3:n]))
+        if not (recent_vol < volumes[strong] * self.shrink_ratio):
+            return None
+
+        # 4) 企稳
+        if self.require_yang and closes[n-1] <= opens[n-1]:
+            return None
+        if self.require_ma5 and closes[n-1] <= ma5:
+            return None
+
+        # 量比（企稳日）
+        prev5 = float(np.mean(volumes[n-6:n-1])) if n >= 6 else float(np.mean(volumes[:n-1]))
+        vol_ratio = float(volumes[n-1] / prev5) if prev5 > 0 else 1.0
+        big_gain = float((closes[strong]/closes[strong-1]-1)*100)
+
+        # 体检清单
+        chk = evaluate_technical_checklist(closes, volumes, highs, lows, opens, pcts, mas, n-1, vol_ratio)
+        chk.pop("突破放量", None)  # 回踩策略是缩量企稳，不适用"突破放量"标签
+        # 覆盖为回踩专属检查
+        chk["20日线向上"] = (ma20 > mas[20][n-6], f"MA20 {ma20:.2f}")
+        chk["站上20日线"] = (closes[n-1] > ma20, f"收盘{closes[n-1]:.2f} vs MA20 {ma20:.2f}")
+        chk["强势基因(放量大涨)"] = (True, f"大涨日 {bars[strong]['date']} +{big_gain:.1f}%")
+        chk["缩量回踩"] = (True, f"回撤{dd:.1f}% 近3日量/大涨日量 {recent_vol/volumes[strong]:.2f}")
+        chk["企稳阳线"] = (closes[n-1] > opens[n-1], f"{'阳线' if closes[n-1]>opens[n-1] else '阴线'} {pcts[n-1]:+.2f}%")
+        chk["站上MA5"] = (closes[n-1] > ma5, f"收盘{closes[n-1]:.2f} vs MA5 {ma5:.2f}")
+        chk = {k: (bool(v[0]) if v[0] is not None else None, v[1]) for k, v in chk.items()}
+        core_items = ["20日线向上", "站上20日线", "强势基因(放量大涨)", "缩量回踩"]
+        core_fail = [k for k in core_items if chk.get(k) and chk[k][0] is False]
+
+        # 打分
+        mom = min(25.0, max(0.0, (big_gain - 4) / 5 * 25))
+        pull = 20.0 if 3.0 <= dd <= 7.0 else (12.0 if dd <= self.pullback_dhi else 0.0)
+        shrink_score = min(15.0, max(0.0, (1.0 - recent_vol/volumes[strong]) / 0.6 * 15))
+        trend = 15.0 if (ma5 > ma10 and ma20 > mas[20][n-6]) else 8.0
+        passed = sum(1 for v in chk.values() if v[0] is True)
+        total = sum(1 for v in chk.values() if v[0] is not None)
+        chk_score = min(25.0, passed / max(total, 1) * 25)
+        score = round(float(min(100.0, mom + pull + shrink_score + trend + chk_score)), 1)
+
+        last = bars[-1]
+        result = {
+            "code": code, "name": name, "date": last["date"],
+            "price": round(float(closes[n-1]), 2),
+            "pct_chg": round(float(pcts[n-1]), 2),
+            "breakout_date": bars[strong]["date"],
+            "days_ago": int(n - 1 - strong),
+            "breakout_gain": round(big_gain, 2),
+            "cluster_pct": round(dd, 2),
+            "converge_days": int(n - 1 - strong),
+            "vol_ratio": round(vol_ratio, 2),
+            "turnover": round(float(spot.get("turnover", 0)), 2) if spot else 0,
+            "amount_yi": round(float(spot.get("amount", 0))/1e8, 2) if spot else 0,
+            "ma5": round(float(ma5), 2), "ma10": round(float(ma10), 2), "ma20": round(float(ma20), 2),
+            "first_break": True, "score": score,
+            "checklist": chk, "core_fail": core_fail,
+            "check_pass": passed, "check_total": total,
+            "spot_pct": spot.get("pct_chg") if spot else None,
+            "spot_turnover": spot.get("turnover") if spot else None,
+        }
+        return result
