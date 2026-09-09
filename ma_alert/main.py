@@ -103,9 +103,23 @@ def _eval_market():
 
 
 def run_once(cfg, do_notify=True, prev_seen=None, cache_ttl=None):
-    st = strategy.MaBreakoutStrategy(cfg)
-    t0 = time.time()
+    mode = cfg.get("strategy_mode", "pullback")
+    st = strategy.PullbackStrategy(cfg) if mode == "pullback" else strategy.MaBreakoutStrategy(cfg)
+    title = "A股强势股回踩提醒" if mode == "pullback" else "A股均线粘合向上变盘提醒"
     data_source.set_kline_cache_dir(os.path.join(OUT_DIR, "kline_cache"))
+
+    # 大盘硬性过滤（强势回踩策略默认开启）
+    if getattr(st, "require_market_up", False):
+        mkt = _eval_market()
+        if mkt is not None and mkt["ok"] is not True:
+            print(f"== 大盘环境不满足（{mkt['text']}），今日不选股")
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            meta = {"title": title, "updated": now, "total": 0, "scanned": 0,
+                    "market": mkt.get("text", ""), "skipped_market": True}
+            report.save_reports(OUT_DIR, [], meta)
+            return [], time.strftime("%Y-%m-%d")
+
+    t0 = time.time()
     print("==> 获取全市场实时快照 ...")
     try:
         spots = data_source.fetch_spot_all()
@@ -133,7 +147,7 @@ def run_once(cfg, do_notify=True, prev_seen=None, cache_ttl=None):
     print(f"\n== 筛选完成：{len(hits)} 只命中（{now}）")
 
     meta = {
-        "title": "A股均线粘合向上变盘提醒",
+        "title": title,
         "updated": now,
         "total": len(spots),
         "scanned": len(cands),
