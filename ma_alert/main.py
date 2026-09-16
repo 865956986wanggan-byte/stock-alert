@@ -131,6 +131,7 @@ def run_once(cfg, do_notify=True, prev_seen=None, cache_ttl=None):
         cands = _load_spot_cache()
         if not cands:
             raise RuntimeError("行情列表获取失败且无本地缓存可用") from e
+        spots = cands  # 用于下方 meta 统计
     print(f"    粗筛后 {len(cands)} 只，开始拉取日K线（带缓存）...")
     codes = [s["code"] for s in cands]
     ttl = cfg.get("cache_ttl_min", 60) if cache_ttl is None else cache_ttl
