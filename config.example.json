@@ -66,6 +66,6 @@
   "shrink_ratio": 0.6,
   "require_pullback_yang": true,
   "require_above_ma5": true,
-  "require_market_up": true,
+  "require_market_up": false,
   "pullback_min_days": 1
 }
