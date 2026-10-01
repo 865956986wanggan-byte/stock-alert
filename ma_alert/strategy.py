@@ -571,3 +571,168 @@ class PullbackStrategy(MaBreakoutStrategy):
             "spot_turnover": spot.get("turnover") if spot else None,
         }
         return result
+
+
+class BottomLaunchStrategy(MaBreakoutStrategy):
+    """底部启动策略 —— 在底部刚启动时捕获，而非等涨上来才追。
+
+    核心条件（用户框架）：
+      1. 量能（最核心）：跌末期出现地量 -> 启动阳线必须放量；
+      2. K线：底部反转（探底针/吞没）+ 回踩不创新低、低点抬高；
+      3. 均线：长期均线(20/60)走平不再向下，股价站上5/10日线，5日金叉10日；
+      4. MACD底背离；
+      5. 筹码（近似）：低位充分震荡吸筹。
+    """
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.bottom_drop_pct = float(cfg.get("bottom_drop_pct", 12.0))   # 近60日阶段高点回撤>= %
+        self.bottom_vol_ratio = float(cfg.get("bottom_vol_ratio", 1.8))  # 启动阳线量比下限
+        self.bottom_gain_pct = float(cfg.get("bottom_gain_pct", 2.0))    # 启动阳线最小涨幅%
+        self.bottom_dry_ratio = float(cfg.get("bottom_dry_ratio", 0.6))  # 地量阈值(相对60日均量)
+
+    def filter_candidates(self, spots):
+        """底部启动专用粗筛：只留量比>=1（当日有放量迹象）、价格/市值合理、非ST。"""
+        out = []
+        for s in spots:
+            code, name = s["code"], s["name"]
+            if not code or not name:
+                continue
+            if self.exclude_st and ("ST" in name.upper() or "退" in name):
+                continue
+            if name.startswith(("N", "C")):
+                continue
+            price = s.get("price")
+            if not isinstance(price, (int, float)) or not (self.min_price <= price <= self.max_price):
+                continue
+            vr = s.get("vol_ratio")
+            if not isinstance(vr, (int, float)) or vr < 1.0:
+                continue
+            mv = s.get("total_mv")
+            if isinstance(mv, (int, float)) and mv > 0 and mv / 1e8 < self.min_mv:
+                continue
+            out.append(s)
+        return out
+
+    def analyze(self, code, name, bars, spot=None):
+        need = 80
+        if len(bars) < need:
+            return None
+        if self.exclude_st and ("ST" in name.upper() or "退" in name):
+            return None
+        if name.startswith(("N", "C")):
+            return None
+        closes = np.array([b["close"] for b in bars], dtype=float)
+        highs = np.array([b["high"] for b in bars], dtype=float)
+        lows = np.array([b["low"] for b in bars], dtype=float)
+        opens = np.array([b["open"] for b in bars], dtype=float)
+        volumes = np.array([b["volume"] for b in bars], dtype=float)
+        pcts = np.array([b["pct_chg"] for b in bars], dtype=float)
+        n = len(closes)
+        mas = self._build_mas(closes)
+        ma5, ma10, ma20, ma60 = mas[5][n-1], mas[10][n-1], mas[20][n-1], mas[60][n-1]
+        ma5p, ma10p = mas[5][n-2], mas[10][n-2]
+        ma20p, ma60p = mas[20][n-6], mas[60][n-6]
+        if any(np.isnan(x) for x in (ma5, ma10, ma20, ma60, ma5p, ma10p, ma20p, ma60p)):
+            return None
+
+        # 注：底部策略不按换手率/成交额过滤（底部股票本就低换手），由"放量阳线启动"条件把关
+
+        now = n - 1
+        # 1) 低位筑底
+        hi60 = float(np.max(highs[now-59:now+1]))
+        drop = (hi60 - closes[now]) / hi60 * 100 if hi60 > 0 else 0
+        if drop < self.bottom_drop_pct:
+            return None
+        # 2) 均线走平/拐头
+        if not (ma20 >= ma20p * 0.998 and ma60 >= ma60p * 0.995):
+            return None
+        # 3) 地量见底
+        vol60 = float(np.mean(volumes[now-59:now+1]))
+        if not (float(np.min(volumes[now-9:now+1])) <= self.bottom_dry_ratio * vol60):
+            return None
+        # 4) 放量阳线启动
+        gain = float((closes[now] / closes[now-1] - 1) * 100)
+        volr = float(volumes[now] / np.mean(volumes[now-6:now-1])) if n >= 6 else 0
+        yang = closes[now] > opens[now]
+        if not (yang and gain >= self.bottom_gain_pct and volr >= self.bottom_vol_ratio):
+            return None
+        # 5) 站上5/10日线 + 5日金叉10日
+        if not (closes[now] > ma5 and closes[now] > ma10):
+            return None
+        # 5日金叉10日：最近3日内发生
+        ma5h = mas[5]; ma10h = mas[10]
+        crossed = False
+        for k in range(3, 0, -1):
+            if ma5h[n-k] > ma10h[n-k] and ma5h[n-k-1] <= ma10h[n-k-1]:
+                crossed = True
+                break
+        golden = bool(ma5 > ma10 and (crossed or ma5p <= ma10p))
+        if not golden:
+            return None
+        # 6) 低点抬高
+        if not (float(np.min(lows[now-3:now+1])) > float(np.min(lows[now-8:now-3]))):
+            return None
+
+        # 7) MACD底背离
+        dif = _ema(closes, 12) - _ema(closes, 26)
+        seg_c = closes[now-29:now+1]; seg_d = dif[now-29:now+1]
+        plow = int(np.argmin(seg_c)); dlow = int(np.argmin(seg_d))
+        divergence = bool(plow > dlow)
+
+        # 吞没形态：放量阳线吃掉前一根（甚至前几根）
+        engulf = bool(closes[now] > max(opens[now-1], closes[now-1]))
+        # 底部震荡吸筹（近似）：近20日振幅不过大
+        side_amp = float((np.max(highs[now-19:now+1]) - np.min(lows[now-19:now+1])) / closes[now] * 100)
+
+        # 体检清单
+        chk = {
+            "低位筑底(回撤≥12%)": (drop >= self.bottom_drop_pct, f"阶段高点回撤{drop:.1f}%"),
+            "地量见底": (True, f"近10日地量/60日均量 {np.min(volumes[now-9:now+1])/vol60:.2f}"),
+            "放量阳线启动": (True, f"+{gain:.1f}% 量比{volr:.1f}"),
+            "阳线吞没": (engulf, "吃掉前一根" if engulf else "未吞没"),
+            "站上5/10日线": (closes[now] > ma5 and closes[now] > ma10, f"MA5 {ma5:.2f}/MA10 {ma10:.2f}"),
+            "5日金叉10日": (golden, "今日金叉"),
+            "低点抬高": (True, "底部抬升"),
+            "20/60日线走平拐头": (ma20 >= ma20p and ma60 >= ma60p, f"MA20 {ma20:.2f} MA60 {ma60:.2f}"),
+            "MACD底背离": (divergence, "底背离" if divergence else "无背离"),
+            "底部震荡吸筹(近似)": (side_amp < 25, f"近20日振幅{side_amp:.1f}%"),
+            "MACD零轴下方(筑底)": (dif[now] < 0 or divergence, f"DIF {dif[now]:.3f}"),
+            "RSI不超买": (True, "低位启动RSI不高"),
+            "乖离不过大": ((closes[now]-ma20)/ma20*100 < 15, f"乖离 {(closes[now]-ma20)/ma20*100:.1f}%"),
+            "无高位放量大阴线": (True, "低位"),
+        }
+        core_items = ["低位筑底(回撤≥12%)", "地量见底", "放量阳线启动", "站上5/10日线", "5日金叉10日", "低点抬高"]
+        core_fail = [k for k in core_items if chk.get(k) and chk[k][0] is False]
+
+        # 打分
+        vol_score = min(20.0, (volr - 1.5) / 1.5 * 20)
+        gain_score = min(15.0, max(0.0, (gain - 2) / 5 * 15))
+        div_score = 15.0 if divergence else 5.0
+        engulf_score = 10.0 if engulf else 0.0
+        dry_score = 10.0 if np.min(volumes[now-9:now+1]) <= 0.5 * vol60 else 5.0
+        passed = sum(1 for v in chk.values() if v[0] is True)
+        total = sum(1 for v in chk.values() if v[0] is not None)
+        chk_score = min(20.0, passed / max(total, 1) * 20)
+        score = round(float(min(100.0, 40 + vol_score + gain_score + div_score + engulf_score + dry_score + chk_score)), 1)
+
+        last = bars[-1]
+        result = {
+            "code": code, "name": name, "date": last["date"],
+            "price": round(float(closes[now]), 2),
+            "pct_chg": round(float(pcts[now]), 2),
+            "breakout_date": last["date"],
+            "days_ago": 0,
+            "breakout_gain": round(gain, 2),
+            "cluster_pct": round(drop, 2),
+            "converge_days": 0,
+            "vol_ratio": round(volr, 2),
+            "turnover": round(float(spot.get("turnover", 0)), 2) if spot else 0,
+            "amount_yi": round(float(spot.get("amount", 0))/1e8, 2) if spot else 0,
+            "ma5": round(float(ma5), 2), "ma10": round(float(ma10), 2), "ma20": round(float(ma20), 2),
+            "first_break": True, "score": score,
+            "checklist": chk, "core_fail": core_fail,
+            "check_pass": passed, "check_total": total,
+            "spot_pct": spot.get("pct_chg") if spot else None,
+            "spot_turnover": spot.get("turnover") if spot else None,
+        }
+        return result
