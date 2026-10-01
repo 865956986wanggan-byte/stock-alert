@@ -59,7 +59,7 @@
   "require_core_conditions": true,
   "min_amount_yi": 1.0,
   "min_amp_pct": 1.8,
-  "strategy_mode": "pullback",
+  "strategy_mode": "bottom",
   "big_day_pct": 5.0,
   "pullback_dlo": 2.0,
   "pullback_dhi": 10.0,
@@ -67,5 +67,9 @@
   "require_pullback_yang": true,
   "require_above_ma5": true,
   "require_market_up": false,
-  "pullback_min_days": 1
+  "pullback_min_days": 1,
+  "bottom_drop_pct": 12.0,
+  "bottom_vol_ratio": 1.8,
+  "bottom_gain_pct": 2.0,
+  "bottom_dry_ratio": 0.6
 }
