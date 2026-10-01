@@ -103,9 +103,13 @@ def _eval_market():
 
 
 def run_once(cfg, do_notify=True, prev_seen=None, cache_ttl=None):
-    mode = cfg.get("strategy_mode", "pullback")
-    st = strategy.PullbackStrategy(cfg) if mode == "pullback" else strategy.MaBreakoutStrategy(cfg)
-    title = "A股强势股回踩提醒" if mode == "pullback" else "A股均线粘合向上变盘提醒"
+    mode = cfg.get("strategy_mode", "bottom")
+    if mode == "pullback":
+        st = strategy.PullbackStrategy(cfg); title = "A股强势股回踩提醒"
+    elif mode == "bottom":
+        st = strategy.BottomLaunchStrategy(cfg); title = "A股底部启动提醒"
+    else:
+        st = strategy.MaBreakoutStrategy(cfg); title = "A股均线粘合向上变盘提醒"
     data_source.set_kline_cache_dir(os.path.join(OUT_DIR, "kline_cache"))
 
     # 大盘硬性过滤（强势回踩策略默认开启）
