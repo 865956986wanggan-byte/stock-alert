@@ -1,11 +1,12 @@
 {
   "date": "2026-10-26",
-  "runs": 3,
+  "runs": 4,
   "ok": 0,
   "errors": [
     "07:16 失败: Object of type bool is not JSON serializable",
     "08:47 失败: Object of type bool is not JSON serializable",
-    "11:29 失败: Object of type bool is not JSON serializable"
+    "11:29 失败: Object of type bool is not JSON serializable",
+    "13:35 失败: Object of type bool is not JSON serializable"
   ],
   "pushed": 0
 }
